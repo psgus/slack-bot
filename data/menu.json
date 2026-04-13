@@ -1,0 +1,36 @@
+{
+  "week_start": "2026-01-05",
+  "timezone": "Asia/Seoul",
+  "note": "Sanitized sample menu for local checks.",
+  "menus": {
+    "monday": {
+      "lunch": ["Sample soup", "Rice"],
+      "dinner": ["Sample pasta", "Salad"]
+    },
+    "tuesday": {
+      "lunch": ["Sample curry", "Rice"],
+      "dinner": ["Sample stew", "Side dish"]
+    },
+    "wednesday": {
+      "lunch": [],
+      "dinner": []
+    },
+    "thursday": {
+      "lunch": [],
+      "dinner": []
+    },
+    "friday": {
+      "lunch": [],
+      "dinner": []
+    },
+    "saturday": {
+      "lunch": [],
+      "dinner": []
+    },
+    "sunday": {
+      "lunch": [],
+      "dinner": []
+    }
+  }
+}
+
