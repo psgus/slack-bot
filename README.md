@@ -4,3 +4,26 @@
 
 이 저장소는 공개 또는 보관을 위해 정리한 버전입니다. 실제 운영 토큰, 서버 주소, SSH 키, 개인 대화 기록, 실제 외부 서비스 주소는 포함하지 않습니다.
 
+## 로컬 실행
+
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+python monkey_bot.py --check
+python monkey_bot.py --preview "오늘 점심"
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+python monkey_bot.py --check
+python monkey_bot.py --preview "오늘 점심"
+```
