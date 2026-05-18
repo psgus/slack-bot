@@ -4,28 +4,28 @@
   "note": "Sanitized sample menu for local checks.",
   "menus": {
     "monday": {
-      "lunch": ["Sample soup", "Rice"],
-      "dinner": ["Sample pasta", "Salad"]
+      "lunch": ["Sample soup", "Rice", "Vegetable side", "Kimchi"],
+      "dinner": ["Sample pasta", "Salad", "Fruit"]
     },
     "tuesday": {
-      "lunch": ["Sample curry", "Rice"],
-      "dinner": ["Sample stew", "Side dish"]
+      "lunch": ["Sample curry", "Rice", "Pickles"],
+      "dinner": ["Sample stew", "Rice", "Side dish"]
     },
     "wednesday": {
-      "lunch": [],
-      "dinner": []
+      "lunch": ["Sample noodles", "Dumplings", "Kimchi"],
+      "dinner": ["Sample bowl", "Soup", "Salad"]
     },
     "thursday": {
-      "lunch": [],
-      "dinner": []
+      "lunch": ["Sample cutlet", "Rice", "Cabbage salad"],
+      "dinner": ["Sample fried rice", "Soup", "Side dish"]
     },
     "friday": {
-      "lunch": [],
-      "dinner": []
+      "lunch": ["Sample chicken", "Rice", "Vegetables"],
+      "dinner": ["Sample tofu stew", "Rice", "Kimchi"]
     },
     "saturday": {
-      "lunch": [],
-      "dinner": []
+      "lunch": ["Sample sandwich", "Soup", "Fruit"],
+      "dinner": ["Sample rice bowl", "Soup", "Pickles"]
     },
     "sunday": {
       "lunch": [],
