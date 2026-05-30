@@ -1,0 +1,15 @@
+.env
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.key
+*.pem
+
+data/conversation_memory.json
+data/user_memory.json
+data/memory_state.json
+data/scheduled_messages.json
+data/*state*.json
+data/kakao_posts_cache.json
