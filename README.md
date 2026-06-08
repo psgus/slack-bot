@@ -91,3 +91,7 @@ APP_DIR=/opt/monkey-bot START_SERVICE=false scripts/setup_ubuntu.sh
 - `data/conversation_memory.json`, `data/user_memory.json`, `data/scheduled_messages.json` 같은 상태 파일이 없는지 확인
 - 실제 서버 주소, Slack ID, 토큰, SSH 키 경로가 문서나 코드에 남아 있지 않은지 확인
 - 가능하면 GitHub secret scanning 또는 `gitleaks` 같은 도구로 추가 검사
+
+## 보관 메모
+
+이 저장소는 공개 가능한 코드 구조와 작업 이력을 남기기 위한 보관용 스냅샷입니다.
