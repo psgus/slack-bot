@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=monkey
-WorkingDirectory=/opt/monkey-bot
-ExecStart=/opt/monkey-bot/.venv/bin/python -u /opt/monkey-bot/monkey_bot.py
+User=ubuntu
+WorkingDirectory=/home/ubuntu/monkey-bot
+ExecStart=/home/ubuntu/monkey-bot/.venv/bin/python -u /home/ubuntu/monkey-bot/monkey_bot.py
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1

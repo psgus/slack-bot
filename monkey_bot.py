@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import base64
 import hashlib
@@ -9,6 +9,7 @@ import json
 import os
 import random
 import re
+import socket
 import sys
 import threading
 import time
@@ -43,31 +44,35 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_MENU_PATH = ROOT / "data" / "menu.json"
-DEFAULT_KAKAO_CHANNEL_PROFILE_ID = "example-profile-id"
-DEFAULT_KAKAO_WEEKLY_MENU_POST_URL = "https://example.com/menu-post"
+DEFAULT_KAKAO_CHANNEL_PROFILE_ID = "_xhzNjn"
+DEFAULT_KAKAO_WEEKLY_MENU_POST_URL = "https://pf.kakao.com/_xhzNjn/112664323"
 DEFAULT_KAKAO_WEEKLY_MENU_SYNC_INTERVAL_SECONDS = 300
 DEFAULT_KAKAO_DAILY_MENU_POST_INTERVAL_SECONDS = 300
 DEFAULT_OPENAI_MENU_VISION_MODEL = "gpt-5.4-mini"
-DEFAULT_COACHING_ROOM_BASE_URL = "https://example.com/coaching-room"
-DEFAULT_LAUNDRY_STATUS_URL = "https://example.com/api/laundry/status"
+DEFAULT_COACHING_ROOM_BASE_URL = "https://reservation-coachingroom.vercel.app"
+DEFAULT_LAUNDRY_STATUS_URL = ""
 DEFAULT_COACHING_ROOM_NICKNAMES = (
-    "스터디룸",
-    "회의방",
-    "프로젝트룸",
-    "집중방",
-    "리뷰룸",
+    "\uce74\uc774\uc0ac\ub974\uac00 \ucc1c\ud568",
+    "\ub8e8\ube44\ucf58 \uac74\ub11c\uc74c",
+    "\ube0c\ub8e8\ud22c\uc2a4 \ucd9c\uc785\uae08\uc9c0",
+    "\uc6d0\ub85c\uc6d0 \ubab0\ub798\ud68c\uc758",
+    "SPQR \uc811\uc218\uc644\ub8cc",
+    "\uac08\ub9ac\uc544 \ud138\ub7ec\uac10",
+    "\ub85c\ub9c8\uad70 \uc8fc\ub454\uc911",
+    "\ud669\uc81c \ud3d0\ud558 \uc785\uc7a5",
+    "\ud074\ub808\uc624\ud30c\ud2b8\ub77c \ucf5c",
+    "\ud3ec\ub8f8 \uc791\ub2f9\ubaa8\uc758",
 )
-LEGACY_COACHING_ROOM_NICKNAMES: tuple[str, ...] = ()
-DEFAULT_COACHING_ROOM_CANCEL_PIN = ""
-DEFAULT_COACHING_ROOM_RANDOM_NAME_USER_IDS: set[str] = set()
+LEGACY_COACHING_ROOM_NICKNAMES = ()
+DEFAULT_COACHING_ROOM_RANDOM_NAME_USER_IDS = {"U0AL115FUR4"}
 COACHING_ROOM_MAX_DURATION_MINUTES = 240
 COACHING_ROOM_IDS = {
     "201",
     "202",
     "203",
-    "204",
-    "205",
-    "206",
+    "회의실5",
+    "회의실6",
+    "회의실7",
     "301",
     "302",
     "303",
@@ -83,6 +88,11 @@ COACHING_ROOM_IDS = {
     "406",
     "407",
 }
+COACHING_ROOM_NUMBER_RE = re.compile(r"(?<!\d)([2-4]\d{2})(?!\d)\s*호?")
+COACHING_ROOM_SECOND_FLOOR_ALIAS_RE = re.compile(
+    r"(?:2\s*층\s*)?(?:회의실|미팅룸)\s*([5-7])(?!\d)\s*(?:번|호)?"
+    r"|(?:2\s*층\s*)?([5-7])(?!\d)\s*(?:번\s*)?(?:회의실|미팅룸)"
+)
 LAUNDRY_DEVICES = [
     {"id": 1, "name": "워시타워_1", "zone": "men"},
     {"id": 2, "name": "워시타워_2", "zone": "men"},
@@ -99,6 +109,10 @@ LAUNDRY_ZONE_LABELS = {
     "common": "공통",
     "women": "여자",
 }
+LAUNDRY_MACHINE_EMOJIS = {
+    "washer": "🫧",
+    "dryer": "💨",
+}
 LAUNDRY_STATE_LABELS = {
     "POWER_OFF": "꺼짐",
     "INITIAL": "대기",
@@ -109,12 +123,83 @@ LAUNDRY_STATE_LABELS = {
     "SPINNING": "탈수 중",
     "COOLING": "냉각 중",
     "DRYING": "건조 중",
+    "REFRESHING": "리프레시 중",
     "COMPLETE": "완료",
     "WRINKLE_CARE": "구김 방지",
+    "END": "완료",
     "ERROR": "오류",
 }
-LAUNDRY_RUNNING_STATES = {"RUNNING", "WASHING", "RINSING", "SPINNING", "COOLING", "DRYING"}
+LAUNDRY_RUNNING_STATES = {"RUNNING", "WASHING", "RINSING", "SPINNING", "COOLING", "DRYING", "REFRESHING"}
+LAUNDRY_AVAILABLE_STATES = {"POWER_OFF", "INITIAL", "COMPLETE", "END"}
 LAUNDRY_COMMAND_KEYWORDS = ("세탁", "세탁기", "빨래", "건조기", "워시타워", "laundry")
+MENTION_REQUIRED_COMMAND_KEYWORDS = (
+    *LAUNDRY_COMMAND_KEYWORDS,
+    "점심",
+    "저녁",
+    "메뉴",
+    "밥",
+    "식단",
+    "코칭실",
+    "예약",
+    "공지",
+    "전체공지",
+    "사다리",
+)
+PASSIVE_JOIN_KEYWORDS = (
+    "?",
+    "뭐가",
+    "뭐임",
+    "뭐야",
+    "뭐지",
+    "왜",
+    "어떻게",
+    "어케",
+    "어떡",
+    "추천",
+    "골라",
+    "고를",
+    "어때",
+    "어떰",
+    "생각",
+    "의견",
+    "판단",
+    "나아",
+    "괜찮",
+    "가능",
+    "도와",
+    "방법",
+    "해결",
+    "할까",
+    "맞나",
+    "맞아?",
+    "망했다",
+    "빡세",
+    "개웃",
+    "웃기",
+    "미쳤",
+    "레전드",
+    "현타",
+    "큰일",
+    "살려",
+    "에바",
+)
+PASSIVE_IGNORED_MESSAGES = {
+    "ㅇㅇ",
+    "ㄴㄴ",
+    "ㄱㄱ",
+    "ㄷㄷ",
+    "ㅋㅋ",
+    "ㅎㅎ",
+    "ㅠㅠ",
+    "ㅜㅜ",
+    "네",
+    "넵",
+    "응",
+    "아니",
+    "오키",
+    "오케이",
+}
+MONKEY_CALL_RE = re.compile(r"(?<![0-9A-Za-z가-힣_])몽키(?:야|봇|슬랙봇|슬랫봇)?(?![0-9A-Za-z가-힣_])", re.I)
 MAX_LADDER_PLAYERS = 8
 LADDER_ROWS_PER_PLAYER = 4
 LADDER_MAX_ROWS = 22
@@ -155,6 +240,7 @@ MENU_OCR_CORRECTIONS = {
     "구동": "규동",
     "규동(일본식소고기덮밥)": "규동",
     "다시마모국": "다시마무국",
+    "배틀그라운드X웰스토리 핫치킨덮밥": "핫치킨덮밥",
     "사과야무국": "사각어묵국",
     "수제감자전": "수제김치전",
     "얼큰한 우육국밥": "얼큰한 한우국밥",
@@ -167,7 +253,7 @@ MENU_OCR_ITEM_SPLITS = {
 }
 
 MENU_PROMO_PREFIX_PATTERNS = [
-    re.compile(r"^(?:이벤트|프로모션)\s*"),
+    re.compile(r"^배틀그라운드\s*(?:[xX×]\s*웰스토리)?\s*"),
 ]
 
 MENU_OCR_ITEM_MERGES = {
@@ -241,6 +327,9 @@ MEMORY_STATE_PATH = ROOT / "data" / "memory_state.json"
 SCHEDULED_MESSAGES_PATH = ROOT / "data" / "scheduled_messages.json"
 MAX_SCHEDULED_MESSAGES = 200
 SCHEDULED_MESSAGES_LOCK = threading.Lock()
+COACHING_ROOM_RESERVATIONS_PATH = ROOT / "data" / "coaching_room_reservations.json"
+MAX_COACHING_ROOM_RESERVATION_RECORDS = 500
+COACHING_ROOM_RESERVATIONS_LOCK = threading.Lock()
 USER_PERSONA_PATH = ROOT / "data" / "user_personas.json"
 KAKAO_POST_CACHE_PATH = ROOT / "data" / "kakao_posts_cache.json"
 KAKAO_CACHE_LOCK = threading.Lock()
@@ -539,6 +628,121 @@ def load_scheduled_messages() -> list[dict[str, str]]:
         return load_scheduled_messages_unlocked()
 
 
+def normalize_coaching_room_reservation_record(raw: Any) -> dict[str, str] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    required_keys = ("id", "room_id", "date", "start_time", "end_time", "nickname", "cancel_pin", "created_at", "created_by")
+    values: dict[str, str] = {}
+    for key in required_keys:
+        value = raw.get(key, "")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        values[key] = value.strip()
+
+    try:
+        datetime.fromisoformat(values["created_at"])
+        datetime.fromisoformat(f"{values['date']}T00:00:00")
+    except ValueError:
+        return None
+
+    status = raw.get("status", "active")
+    if not isinstance(status, str) or status not in {"active", "canceled"}:
+        status = "active"
+    values["status"] = status
+
+    canceled_at = raw.get("canceled_at", "")
+    if isinstance(canceled_at, str) and canceled_at.strip():
+        try:
+            datetime.fromisoformat(canceled_at.strip())
+            values["canceled_at"] = canceled_at.strip()
+        except ValueError:
+            pass
+
+    return values
+
+
+def load_coaching_room_reservations_unlocked() -> list[dict[str, str]]:
+    try:
+        data = json.loads(COACHING_ROOM_RESERVATIONS_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(data, list):
+        return []
+
+    records = [record for item in data if (record := normalize_coaching_room_reservation_record(item)) is not None]
+    records.sort(key=lambda item: item["created_at"], reverse=True)
+    return records[:MAX_COACHING_ROOM_RESERVATION_RECORDS]
+
+
+def save_coaching_room_reservations_unlocked(records: list[dict[str, str]]) -> None:
+    COACHING_ROOM_RESERVATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cleaned = [record for item in records if (record := normalize_coaching_room_reservation_record(item)) is not None]
+    cleaned.sort(key=lambda item: item["created_at"], reverse=True)
+    cleaned = cleaned[:MAX_COACHING_ROOM_RESERVATION_RECORDS]
+    COACHING_ROOM_RESERVATIONS_PATH.write_text(
+        json.dumps(cleaned, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_coaching_room_reservations() -> list[dict[str, str]]:
+    with COACHING_ROOM_RESERVATIONS_LOCK:
+        return load_coaching_room_reservations_unlocked()
+
+
+def save_created_coaching_room_reservation(result: dict[str, Any], user_id: str | None, now: datetime) -> None:
+    if result.get("status") != "created" or not user_id:
+        return
+
+    reservation = result.get("reservation", {})
+    if not isinstance(reservation, dict):
+        return
+    reservation_id = reservation.get("id")
+    cancel_pin = result.get("cancel_pin")
+    if not isinstance(reservation_id, str) or not reservation_id.strip():
+        return
+    if not isinstance(cancel_pin, str) or not cancel_pin.strip():
+        return
+
+    record = {
+        "id": reservation_id.strip(),
+        "room_id": str(result.get("room_id", "")).strip(),
+        "date": str(result.get("date", "")).strip(),
+        "start_time": str(result.get("start_time", "")).strip(),
+        "end_time": str(result.get("end_time", "")).strip(),
+        "nickname": str(reservation.get("nickname", "코칭실 예약")).strip() or "코칭실 예약",
+        "cancel_pin": cancel_pin.strip(),
+        "created_at": now.astimezone(get_timezone()).isoformat(),
+        "created_by": user_id,
+        "status": "active",
+    }
+    if normalize_coaching_room_reservation_record(record) is None:
+        return
+
+    with COACHING_ROOM_RESERVATIONS_LOCK:
+        records = [item for item in load_coaching_room_reservations_unlocked() if item["id"] != record["id"]]
+        records.insert(0, record)
+        save_coaching_room_reservations_unlocked(records)
+
+
+def mark_coaching_room_reservation_canceled(reservation_id: str, now: datetime) -> None:
+    with COACHING_ROOM_RESERVATIONS_LOCK:
+        records = load_coaching_room_reservations_unlocked()
+        changed = False
+        for record in records:
+            if record["id"] == reservation_id:
+                record["status"] = "canceled"
+                record["canceled_at"] = now.astimezone(get_timezone()).isoformat()
+                changed = True
+                break
+        if changed:
+            save_coaching_room_reservations_unlocked(records)
+
+
 def load_user_personas() -> dict[str, str]:
     try:
         data = json.loads(USER_PERSONA_PATH.read_text(encoding="utf-8"))
@@ -701,6 +905,61 @@ def strip_slack_event_command_text(text: str) -> str:
     return strip_leading_reply_mentions(text)
 
 
+def normalized_command_text(text: str) -> str:
+    return re.sub(r"\s+", "", strip_slack_mentions(text).lower())
+
+
+def has_monkey_call(text: str) -> bool:
+    return bool(MONKEY_CALL_RE.search(strip_slack_mentions(text)))
+
+
+def strip_monkey_call(text: str) -> str:
+    cleaned = MONKEY_CALL_RE.sub(" ", strip_slack_mentions(text))
+    cleaned = re.sub(r"^[\s,:.!?~\-]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def contains_mention_required_command(text: str) -> bool:
+    normalized = normalized_command_text(text)
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in MENTION_REQUIRED_COMMAND_KEYWORDS)
+
+
+def meaningful_passive_text(text: str) -> str:
+    cleaned = strip_monkey_call(text) if has_monkey_call(text) else strip_slack_mentions(text)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def is_too_small_for_passive_reply(text: str) -> bool:
+    compact = re.sub(r"[^0-9A-Za-z가-힣ㄱ-ㅎㅏ-ㅣ]", "", text).lower()
+    if len(compact) < env_int("CHANNEL_PASSIVE_MIN_CHARS", 4):
+        return True
+    if compact in PASSIVE_IGNORED_MESSAGES:
+        return True
+    return bool(re.fullmatch(r"[ㅋㅎㅠㅜㅇ응네넵예아니ㄴ]+", compact))
+
+
+def should_store_channel_context_message(text: str) -> bool:
+    cleaned = meaningful_passive_text(text)
+    return bool(cleaned) and not is_too_small_for_passive_reply(cleaned)
+
+
+def should_passively_join_channel_message(text: str) -> bool:
+    if not env_bool("CHANNEL_PASSIVE_CHAT_ENABLED", True):
+        return False
+    cleaned = meaningful_passive_text(text)
+    if not cleaned or is_too_small_for_passive_reply(cleaned):
+        return False
+    if contains_mention_required_command(cleaned):
+        return False
+    lowered = cleaned.lower()
+    return any(keyword in lowered for keyword in PASSIVE_JOIN_KEYWORDS)
+
+
 def secure_url(url: str) -> str:
     if url.startswith("http://"):
         return "https://" + url[len("http://") :]
@@ -767,7 +1026,7 @@ def fetch_bytes(url: str) -> tuple[bytes, str]:
         headers={
             "User-Agent": "Mozilla/5.0",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Referer": os.getenv("KAKAO_REFERER_URL", "https://example.com/"),
+            "Referer": "https://pf.kakao.com/",
         },
         method="GET",
     )
@@ -793,11 +1052,11 @@ def kakao_image_url_candidates(url: str) -> list[str]:
 
 
 def kakao_posts_url(encoded_id: str) -> str:
-    return os.getenv("KAKAO_POSTS_API_URL_TEMPLATE", "https://example.com/rocket-web/web/profiles/{profile_id}/posts?includePinnedPost=true").format(profile_id=encoded_id)
+    return f"https://pf.kakao.com/rocket-web/web/profiles/{encoded_id}/posts?includePinnedPost=true"
 
 
 def kakao_posts_page_url(encoded_id: str) -> str:
-    return os.getenv("KAKAO_POSTS_PAGE_URL_TEMPLATE", "https://example.com/{profile_id}/posts").format(profile_id=encoded_id)
+    return f"https://pf.kakao.com/{encoded_id}/posts"
 
 
 def fetch_kakao_posts(encoded_id: str) -> list[dict[str, Any]]:
@@ -938,19 +1197,6 @@ def save_kakao_posts_cache(posts: list[dict[str, Any]], now: datetime) -> None:
     with KAKAO_CACHE_LOCK:
         KAKAO_POST_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         KAKAO_POST_CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def load_kakao_posts_cache() -> list[dict[str, Any]]:
-    try:
-        data = json.loads(KAKAO_POST_CACHE_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, dict):
-        return []
-    posts = data.get("posts")
-    return [post for post in posts if isinstance(post, dict)] if isinstance(posts, list) else []
 
 
 def load_weekly_menu_image_state() -> dict[str, Any]:
@@ -1167,7 +1413,7 @@ def image_data_url(url: str) -> str:
 
 
 def extract_weekly_menu_from_image(post: dict[str, Any], now: datetime) -> dict[str, Any] | None:
-    if not env_bool("OPENAI_MENU_VISION_ENABLED", False):
+    if not env_bool("OPENAI_MENU_VISION_ENABLED", True):
         return None
 
     api_key = os.getenv("OPENAI_API_KEY")
@@ -1322,7 +1568,7 @@ def weekly_menu_image_completed(state: dict[str, Any], menu: dict[str, Any], wee
 
 def sync_weekly_menu_image(now: datetime | None = None, force: bool = False) -> dict[str, Any]:
     now = now or datetime.now(get_timezone())
-    if not force and not env_bool("KAKAO_WEEKLY_MENU_AUTO_SYNC", False):
+    if not force and not env_bool("KAKAO_WEEKLY_MENU_AUTO_SYNC", True):
         return {"ok": False, "skipped": "disabled"}
     if not force and not weekly_menu_check_window(now):
         return {"ok": False, "skipped": "outside_window"}
@@ -1451,7 +1697,7 @@ def daily_menu_posts_completed(state: dict[str, Any], now: datetime) -> bool:
 
 def sync_and_post_daily_menu_posts(now: datetime | None = None, force: bool = False) -> dict[str, Any]:
     now = now or datetime.now(get_timezone())
-    if not force and not env_bool("KAKAO_DAILY_MENU_AUTO_POST", False):
+    if not force and not env_bool("KAKAO_DAILY_MENU_AUTO_POST", True):
         return {"ok": False, "skipped": "disabled"}
     meals_to_check = ("lunch", "dinner") if force else tuple(daily_menu_post_meals_to_check(now))
     if not meals_to_check:
@@ -1813,7 +2059,7 @@ def parse_ladder_command(text: str) -> tuple[list[str], list[str], str | None] |
 def ladder_usage() -> str:
     return (
         ":monkey_face: 사다리는 이렇게 써줘요.\n"
-        "`@몽키 사다리 참가자1, 참가자2, 참가자3 / 선택지1, 선택지2, 선택지3`\n"
+        "`@몽키 사다리 타잔, 세인, 원우 / 치킨, 피자, 떡볶이`\n"
         "결과가 하나면 한 명만 걸리고 나머지는 꽝으로 채울게요."
     )
 
@@ -1957,13 +2203,6 @@ def format_ladder_text(game: dict[str, Any]) -> str:
         "```\n"
         f"{format_ladder_result_lines(game)}"
     )
-
-
-def format_ladder_response(text: str) -> str | None:
-    game, error = build_ladder_game(text)
-    if game is None:
-        return error
-    return format_ladder_text(game)
 
 
 def format_ladder_pending_message() -> str:
@@ -2323,7 +2562,7 @@ def ask_openai(
     persona_instruction: str | None = None,
     current_user_id: str | None = None,
 ) -> str | None:
-    if not env_bool("OPENAI_ENABLED", False):
+    if not env_bool("OPENAI_ENABLED", True):
         return None
 
     api_key = os.getenv("OPENAI_API_KEY")
@@ -2346,8 +2585,9 @@ def ask_openai(
 
     instructions = (
         "너는 사내 슬랙 채널의 한국어 봇 '몽키'다. "
-        "답변은 짧고 친근하게 한다. 과한 장문은 피하고, 메뉴 질문은 시스템 메뉴 기능이 처리하므로 "
-        "일상 대화, 추천, 가벼운 농담, 따라 말하기만 자연스럽게 답한다. "
+        "사람들 대화에 같이 있는 친구처럼 자연스럽게 답한다. "
+        "짧게 받아치는 게 어울리면 짧게, 설명이나 추천이 필요하면 충분히 자세히 말한다. "
+        "메뉴, 세탁, 예약, 공지 같은 기능성 명령은 별도 시스템 기능이 처리하므로 일반 대화에서는 실행한 척하지 않는다. "
         "Slack 마크다운 강조를 쓰지 않는다. 특히 **굵게**, *기울임* 같은 별표 강조를 쓰지 말고 일반 문장으로 답한다. "
         "사용자가 자신을 깎아내리면 단정하지 말고 부드럽게 받아준다. "
         "사용자 기억과 최근 대화 맥락이 있으면 자연스럽게 반영하되, 매번 노골적으로 들먹이지는 말고 필요한 만큼만 참고한다."
@@ -2359,7 +2599,7 @@ def ask_openai(
         "model": os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
         "instructions": instructions,
         "input": prompt_input,
-        "max_output_tokens": 350,
+        "max_output_tokens": 700,
     }
 
     reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT")
@@ -2418,10 +2658,33 @@ def parse_laundry_status_command(text: str) -> bool:
 
 
 def fetch_laundry_status() -> dict[str, Any]:
-    payload = request_json("GET", laundry_status_url())
+    url = laundry_status_url()
+    if not url:
+        raise RuntimeError("세탁 API 주소가 설정되어 있지 않아요. `LAUNDRY_STATUS_URL`을 살아있는 `/api/status` 주소로 설정해야 해요.")
+    payload = request_json("GET", url)
     if not isinstance(payload, dict):
         raise RuntimeError("세탁 API 응답 형식이 이상해요.")
     return payload
+
+
+def format_laundry_fetch_error(exc: Exception) -> str:
+    configured_url = laundry_status_url() or "(unset)"
+    if isinstance(exc, urllib.error.HTTPError):
+        return f":monkey_face: 세탁 서버가 HTTP {exc.code}로 응답했어요. `LAUNDRY_STATUS_URL`을 확인해야 해요."
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, socket.gaierror):
+            return (
+                ":monkey_face: 세탁 서버 주소를 못 찾고 있어요. "
+                "전에 쓰던 임시 Cloudflare 주소가 꺼졌거나 바뀐 것 같아요. "
+                f"`LAUNDRY_STATUS_URL`을 살아있는 주소로 바꿔야 해요. 현재 값: `{configured_url}`"
+            )
+        if isinstance(reason, TimeoutError):
+            return ":monkey_face: 세탁 서버가 시간 안에 응답하지 않아요. 잠깐 뒤에 다시 시도해줘요."
+        return f":monkey_face: 세탁 서버에 연결하지 못했어요. `{reason}`"
+    if isinstance(exc, RuntimeError) and "LAUNDRY_STATUS_URL" in str(exc):
+        return f":monkey_face: {exc}"
+    return f":monkey_face: 세탁 현황을 가져오다가 오류가 났어요. `{exc}`"
 
 
 def laundry_remaining_minutes(timer: Any) -> int:
@@ -2436,10 +2699,10 @@ def laundry_timer_label(timer: Any) -> str:
         return ""
     hours, minutes = divmod(remaining, 60)
     if hours and minutes:
-        return f"{hours}시간 {minutes}분 남음"
+        return f"{hours}시간 {minutes}분"
     if hours:
-        return f"{hours}시간 남음"
-    return f"{minutes}분 남음"
+        return f"{hours}시간"
+    return f"{minutes}분"
 
 
 def laundry_real_error(value: Any) -> str:
@@ -2453,9 +2716,9 @@ def laundry_real_error(value: Any) -> str:
     return normalized
 
 
-def laundry_machine_state(machine: Any) -> str:
+def laundry_machine_info(machine: Any) -> dict[str, Any]:
     if not isinstance(machine, dict):
-        return "응답 없음"
+        return {"state": "UNKNOWN", "label": "응답 없음", "timer": "", "available": False}
 
     run_state = machine.get("runState")
     raw_state = run_state.get("currentState") if isinstance(run_state, dict) else None
@@ -2467,35 +2730,100 @@ def laundry_machine_state(machine: Any) -> str:
     state_label = LAUNDRY_STATE_LABELS.get(state, state)
     error = laundry_real_error(machine.get("errorState"))
     if state == "ERROR" or (error and state not in LAUNDRY_RUNNING_STATES):
-        return f"{state_label} ({error})" if error else state_label
+        return {
+            "state": state,
+            "label": f"{state_label} ({error})" if error else state_label,
+            "timer": "",
+            "available": False,
+        }
 
     timer_label = laundry_timer_label(timer)
-    if timer_label and state in LAUNDRY_RUNNING_STATES:
-        return f"{state_label}, {timer_label}"
-    return state_label
+    return {
+        "state": state,
+        "label": state_label,
+        "timer": timer_label if state in LAUNDRY_RUNNING_STATES else "",
+        "available": state in LAUNDRY_AVAILABLE_STATES and not timer_label,
+    }
+
+
+def format_laundry_machine_compact(machine: Any) -> str:
+    info = laundry_machine_info(machine)
+    if info["available"]:
+        return "가능"
+    if info["timer"]:
+        return f"{info['label']} {info['timer']}"
+    return str(info["label"])
+
+
+def format_laundry_device_field(device: dict[str, Any], tower: Any) -> dict[str, str]:
+    if not isinstance(tower, dict):
+        value = f"*No.{device['id']}*\n응답 없음"
+    else:
+        washer = format_laundry_machine_compact(tower.get("washer"))
+        dryer = format_laundry_machine_compact(tower.get("dryer"))
+        value = f"*No.{device['id']}*\n{LAUNDRY_MACHINE_EMOJIS['washer']} 세탁 `{washer}`\n{LAUNDRY_MACHINE_EMOJIS['dryer']} 건조 `{dryer}`"
+    return {"type": "mrkdwn", "text": value}
 
 
 def format_laundry_status(status_map: dict[str, Any], now: datetime, user_id: str | None = None) -> str:
-    mention = f"<@{user_id}> " if user_id else ""
     local_now = now.astimezone(get_timezone())
-    lines = [f"{mention}:monkey_face: 세탁 현황 ({local_now.strftime('%H:%M')} 기준)"]
+    lines = [f"🫧 *세탁 현황* 💨 `{local_now.strftime('%H:%M')}` 기준"]
 
     for zone in ("men", "common", "women"):
-        lines.append("")
-        lines.append(f"*{LAUNDRY_ZONE_LABELS[zone]}*")
-        for device in LAUNDRY_DEVICES:
-            if device["zone"] != zone:
-                continue
+        devices = [device for device in LAUNDRY_DEVICES if device["zone"] == zone]
+        device_ids = [str(device["id"]) for device in devices]
+        lines.extend(["", f"*{LAUNDRY_ZONE_LABELS[zone]}* `No.{device_ids[0]}-{device_ids[-1]}`"])
+        for device in devices:
             tower = status_map.get(device["name"])
             if not isinstance(tower, dict):
-                lines.append(f"- No.{device['id']} 응답 없음")
+                lines.extend([f"*No.{device['id']}*", "응답 없음"])
                 continue
-            washer = laundry_machine_state(tower.get("washer"))
-            dryer = laundry_machine_state(tower.get("dryer"))
-            lines.append(f"- No.{device['id']} 세탁기: {washer} / 건조기: {dryer}")
+            washer = format_laundry_machine_compact(tower.get("washer"))
+            dryer = format_laundry_machine_compact(tower.get("dryer"))
+            lines.extend(
+                [
+                    f"*No.{device['id']}*",
+                    f"{LAUNDRY_MACHINE_EMOJIS['washer']} 세탁 `{washer}`",
+                    f"{LAUNDRY_MACHINE_EMOJIS['dryer']} 건조 `{dryer}`",
+                ]
+            )
 
     return "\n".join(lines)
 
+
+def format_laundry_status_blocks(status_map: dict[str, Any], now: datetime, user_id: str | None = None) -> list[dict[str, Any]]:
+    local_now = now.astimezone(get_timezone())
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "🫧 세탁 현황 💨", "emoji": True},
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"`{local_now.strftime('%H:%M')}` 기준"}],
+        },
+    ]
+
+    for zone in ("men", "common", "women"):
+        devices = [device for device in LAUNDRY_DEVICES if device["zone"] == zone]
+        device_ids = [str(device["id"]) for device in devices]
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{LAUNDRY_ZONE_LABELS[zone]}* `No.{device_ids[0]}-{device_ids[-1]}`",
+                },
+            }
+        )
+        blocks.append(
+            {
+                "type": "section",
+                "fields": [format_laundry_device_field(device, status_map.get(device["name"])) for device in devices],
+            }
+        )
+
+    return blocks
 
 COACHING_ROOM_TIME_TOKEN_PATTERN = r"(?:(?:오전|오후)\s*)?[0-2]?\d(?::[0-5]\d|시(?:\s*[0-5]\d\s*분?)?)?"
 COACHING_ROOM_TIME_RE = re.compile(
@@ -2529,10 +2857,6 @@ def coaching_room_nickname() -> str:
 
 def coaching_room_match_nicknames() -> set[str]:
     return set(coaching_room_nicknames()) | set(LEGACY_COACHING_ROOM_NICKNAMES)
-
-
-def coaching_room_cancel_pin() -> str:
-    return os.getenv("COACHING_ROOM_CANCEL_PIN", DEFAULT_COACHING_ROOM_CANCEL_PIN).strip() or DEFAULT_COACHING_ROOM_CANCEL_PIN
 
 
 def coaching_room_allowed(user_id: str | None) -> bool:
@@ -2580,6 +2904,15 @@ def choose_coaching_room_nickname(user_id: str | None) -> str:
     return sanitize_coaching_room_nickname(slack_user_display_name(user_id))
 
 
+def format_coaching_room_room_label(room_id: Any) -> str:
+    text = str(room_id or "").strip()
+    if not text:
+        return "코칭실"
+    if re.fullmatch(r"\d+", text):
+        return f"{text}호"
+    return text
+
+
 def generate_coaching_room_cancel_pin() -> str:
     return f"{random.SystemRandom().randrange(0, 10000):04d}"
 
@@ -2597,13 +2930,14 @@ def format_coaching_room_pin_message(result: dict[str, Any]) -> str:
     reservation = result.get("reservation", {})
     pin = result.get("cancel_pin")
     room_id = result["room_id"]
+    room_label = format_coaching_room_room_label(room_id)
     date = result["date"]
     start_time = result["start_time"]
     end_time = result["end_time"]
     nickname = reservation.get("nickname", "코칭실 예약") if isinstance(reservation, dict) else "코칭실 예약"
     text = (
         ":monkey_face: 코칭실 예약 비밀번호예요.\n"
-        f"방: {room_id}호\n"
+        f"방: {room_label}\n"
         f"날짜: {date}\n"
         f"시간: {start_time}-{end_time}\n"
         f"제목: {nickname}\n"
@@ -2758,25 +3092,44 @@ def compact_coaching_room_tail_ok(tail: str) -> bool:
     return not text
 
 
+def find_coaching_room_reference(text: str) -> tuple[str, int, int] | None:
+    candidates: list[tuple[int, int, str]] = []
+
+    number_match = COACHING_ROOM_NUMBER_RE.search(text)
+    if number_match:
+        candidates.append((number_match.start(), number_match.end(), number_match.group(1)))
+
+    alias_match = COACHING_ROOM_SECOND_FLOOR_ALIAS_RE.search(text)
+    if alias_match:
+        alias_number = alias_match.group(1) or alias_match.group(2)
+        candidates.append((alias_match.start(), alias_match.end(), f"회의실{alias_number}"))
+
+    if not candidates:
+        return None
+
+    start, end, room_id = min(candidates, key=lambda item: item[0])
+    return room_id, start, end
+
+
 def parse_coaching_room_reservation_command(text: str, now: datetime) -> tuple[dict[str, str] | None, str | None]:
     stripped = text.strip()
-    room_match = re.search(r"(?<!\d)([2-4]\d{2})(?!\d)\s*호?", stripped)
+    room_ref = find_coaching_room_reference(stripped)
     has_booking_word = bool(re.search(r"예약|잡아|잡아줘|잡아 줘", stripped))
-    after_room = stripped[room_match.end() :] if room_match else ""
-    range_match = COACHING_ROOM_RANGE_RE.search(after_room) if room_match else None
+    after_room = stripped[room_ref[2] :] if room_ref else ""
+    range_match = COACHING_ROOM_RANGE_RE.search(after_room) if room_ref else None
     compact_command = False
-    if room_match and range_match:
-        compact_command = compact_coaching_room_prefix_ok(stripped[: room_match.start()]) and compact_coaching_room_tail_ok(after_room[range_match.end() :])
+    if room_ref and range_match:
+        compact_command = compact_coaching_room_prefix_ok(stripped[: room_ref[1]]) and compact_coaching_room_tail_ok(after_room[range_match.end() :])
 
-    looks_like_coaching_room = "코칭실" in stripped or "코칭" in stripped or bool(room_match and (has_booking_word or compact_command))
+    looks_like_coaching_room = "코칭실" in stripped or "코칭" in stripped or bool(room_ref and (has_booking_word or compact_command))
     if not looks_like_coaching_room:
         return None, None
-    if not room_match:
+    if not room_ref:
         return None, "방 번호를 못 찾았어요. 예: `307호 23:00부터 00:00까지 예약 잡아줘`"
 
-    room_id = room_match.group(1)
+    room_id, room_start, _ = room_ref
     if room_id not in COACHING_ROOM_IDS:
-        return None, f"{room_id}호는 예약 가능한 코칭실 목록에 없어요."
+        return None, f"{format_coaching_room_room_label(room_id)}는 예약 가능한 코칭실 목록에 없어요."
 
     if not range_match:
         return None, "시간 범위를 못 찾았어요. 예: `307호 오후 9시부터 오후 11시까지 예약 잡아줘`"
@@ -2806,7 +3159,7 @@ def parse_coaching_room_reservation_command(text: str, now: datetime) -> tuple[d
     if duration > COACHING_ROOM_MAX_DURATION_MINUTES:
         return None, f"코칭실 예약은 한 번에 최대 {COACHING_ROOM_MAX_DURATION_MINUTES // 60}시간까지만 받을게요."
 
-    date_source = f"{stripped[: room_match.start()]} {after_room[range_match.end() :]}"
+    date_source = f"{stripped[: room_start]} {after_room[range_match.end() :]}"
     date, date_error = coaching_room_date_from_text(date_source, now)
     if date_error:
         return None, date_error
@@ -2902,6 +3255,7 @@ def format_coaching_room_result(
 ) -> str:
     mention = f"<@{user_id}> " if user_id else ""
     room_id = result["room_id"]
+    room_label = format_coaching_room_room_label(room_id)
     date = result["date"]
     start_time = result["start_time"]
     end_time = result["end_time"]
@@ -2920,7 +3274,7 @@ def format_coaching_room_result(
             pin_line = "예약은 됐는데 비밀번호 전송에 실패했어요. 관리자에게 바로 알려줘요."
         return (
             f"{mention}:monkey_face: 코칭실 예약 잡았어요.\n"
-            f"방: {room_id}호\n"
+            f"방: {room_label}\n"
             f"날짜: {date}\n"
             f"시간: {start_time}-{end_time}"
             f"{title_line}"
@@ -2933,7 +3287,7 @@ def format_coaching_room_result(
         title_line = f"\n제목: {nickname}" if nickname else ""
         return (
             f"{mention}:monkey_face: 이미 같은 코칭실 예약이 잡혀 있어요.\n"
-            f"방: {room_id}호\n"
+            f"방: {room_label}\n"
             f"날짜: {date}\n"
             f"시간: {start_time}-{end_time}"
             f"{title_line}"
@@ -2941,7 +3295,7 @@ def format_coaching_room_result(
     if status == "conflict":
         lines = [
             f"{mention}:monkey_face: 그 시간은 이미 예약이랑 겹쳐요.",
-            f"요청: {date} {room_id}호 {start_time}-{end_time}",
+            f"요청: {date} {room_label} {start_time}-{end_time}",
         ]
         for item in result.get("conflicts", [])[:5]:
             lines.append(f"- {item.get('nickname', '예약')} {item.get('startTime')}-{item.get('endTime')}")
@@ -2957,6 +3311,7 @@ def format_coaching_room_usage(user_id: str | None = None) -> str:
         "- `307 21-23 알고리즘 스터디`\n"
         "- `307 23-00 제목 야간 회고`\n"
         "- `307 23-00`\n"
+        "- `회의실5 13-15`\n"
         "- `307호 23:00부터 00:00까지 예약 잡아줘`\n"
         "- `307호 오후 9시부터 오후 11시까지 프로젝트 회의로 예약해줘`\n"
         "숫자만 쓰면 24시간제로 봐요. 오후는 `13-15`처럼 적거나 `오후 2시`처럼 말해줘요."
@@ -2991,15 +3346,15 @@ def parse_coaching_room_status_command(text: str, now: datetime) -> dict[str, st
         return None
 
     compact = re.sub(r"\s+", "", stripped)
-    room_match = re.search(r"(?<!\d)([2-4]\d{2})(?!\d)\s*호?", stripped)
+    room_ref = find_coaching_room_reference(stripped)
     status_like = any(word in compact for word in ("현황", "상태", "비었", "비어", "예약현황"))
-    room_context = "코칭" in stripped or "방" in stripped or bool(room_match) or "예약현황" in compact
+    room_context = "코칭" in stripped or "방" in stripped or "회의실" in stripped or bool(room_ref) or "예약현황" in compact
     if not (status_like and room_context):
         return None
 
-    room_id = room_match.group(1) if room_match else None
+    room_id = room_ref[0] if room_ref else None
     if room_id and room_id not in COACHING_ROOM_IDS:
-        return {"error": f"{room_id}호는 코칭실 목록에 없어요.", "date": None, "room_id": None}
+        return {"error": f"{format_coaching_room_room_label(room_id)}는 코칭실 목록에 없어요.", "date": None, "room_id": None}
 
     try:
         date = coaching_room_status_date_from_text(stripped, now)
@@ -3036,20 +3391,297 @@ def format_coaching_room_status(result: dict[str, Any], user_id: str | None = No
     mention = f"<@{user_id}> " if user_id else ""
     date = result["date"]
     room_id = result.get("room_id")
-    title = f"{date} {room_id}호 예약 현황" if room_id else f"{date} 코칭실 예약 현황"
+    room_label = format_coaching_room_room_label(room_id)
+    title = f"{date} {room_label} 예약 현황" if room_id else f"{date} 코칭실 예약 현황"
     reservations = result.get("reservations", [])
     if not reservations:
-        empty_target = f"{room_id}호" if room_id else "코칭실"
+        empty_target = room_label if room_id else "코칭실"
         return f"{mention}:monkey_face: {title}\n{empty_target} 예약이 없어요."
 
     lines = [f"{mention}:monkey_face: {title}"]
     for item in reservations[:30]:
+        item_room_label = format_coaching_room_room_label(item.get("roomId"))
         lines.append(
-            f"- {item.get('roomId')}호 {item.get('startTime')}-{item.get('endTime')} {item.get('nickname', '예약')}"
+            f"- {item_room_label} {item.get('startTime')}-{item.get('endTime')} {item.get('nickname', '예약')}"
         )
     if len(reservations) > 30:
         lines.append(f"외 {len(reservations) - 30}건 더 있어요.")
     return "\n".join(lines)
+
+
+def parse_coaching_room_user_reservations_command(text: str) -> dict[str, str] | None:
+    stripped = text.strip()
+    compact = re.sub(r"\s+", "", stripped)
+    if compact in {
+        "내코칭예약",
+        "내코칭실예약",
+        "내코칭",
+        "내코칭상태",
+        "내코칭실상태",
+        "내코칭현황",
+        "내코칭실현황",
+        "내예약",
+        "내상태",
+        "내현황",
+        "내방",
+        "내방예약",
+        "내방상태",
+        "내방현황",
+        "내예약현황",
+        "코칭예약목록",
+        "코칭실예약목록",
+        "코칭상태",
+        "코칭실상태",
+        "방예약목록",
+    }:
+        return {"action": "list"}
+
+    register_match = re.match(
+        r"^(?:코칭실?|방)\s*(?:예약\s*)?(?:등록|저장)\s+([0-9a-fA-F]{6,}(?:-[0-9a-fA-F-]+)?)\s+(\d{4,8})$",
+        stripped,
+    )
+    if register_match:
+        return {"action": "register", "target": register_match.group(1).strip(), "cancel_pin": register_match.group(2).strip()}
+
+    if compact in {"취소", "예약취소"}:
+        return {"action": "ambiguous_cancel"}
+    if compact in {"코칭취소", "코칭실취소", "방취소", "코칭예약취소", "코칭실예약취소", "방예약취소"}:
+        return {"action": "cancel", "target": ""}
+    if compact in {"방금취소", "방금예약취소", "최근취소", "최근예약취소"}:
+        return {"action": "cancel", "target": "__latest__"}
+
+    cancel_match = re.match(r"^(?:코칭실?|방)\s*(?:예약\s*)?(?:취소|예약취소)\s+(.+)$", stripped, re.S)
+    if cancel_match:
+        target = cancel_match.group(1).strip()
+        return {"action": "cancel", "target": target}
+
+    prefix_cancel_match = re.match(r"^(?:취소|예약취소)\s+(?:코칭실?|방)\s+(.+)$", stripped, re.S)
+    if prefix_cancel_match:
+        target = prefix_cancel_match.group(1).strip()
+        return {"action": "cancel", "target": target}
+
+    if "취소" in stripped:
+        if find_coaching_room_reference(stripped):
+            return {"action": "cancel", "target": stripped}
+
+    return None
+
+
+def active_coaching_room_records_for_user(user_id: str | None, now: datetime) -> list[dict[str, str]]:
+    if not user_id:
+        return []
+    today = now.astimezone(get_timezone()).date().isoformat()
+    records = [
+        record
+        for record in load_coaching_room_reservations()
+        if record.get("created_by") == user_id
+        and record.get("status", "active") == "active"
+        and record.get("date", "") >= today
+    ]
+    records.sort(key=lambda item: (item["date"], item["start_time"], item["room_id"]))
+    return records
+
+
+def format_my_coaching_room_reservations(records: list[dict[str, str]], user_id: str | None = None) -> str:
+    mention = f"<@{user_id}> " if user_id else ""
+    if not records:
+        return f"{mention}:monkey_face: 몽키가 기억하는 내 코칭실 예약이 없어요."
+
+    lines = [f"{mention}:monkey_face: 내 코칭실 예약이에요."]
+    for record in records[:15]:
+        short_id = record["id"][:8]
+        room_label = format_coaching_room_room_label(record["room_id"])
+        lines.append(
+            f"- `{short_id}` / {record['date']} {room_label} {record['start_time']}-{record['end_time']} / {record['nickname']}"
+        )
+    if len(records) > 15:
+        lines.append(f"외 {len(records) - 15}건 더 있어요.")
+    lines.append("취소: `취소`, `방금 취소`, `306 취소`, `306 14-15 취소`")
+    return "\n".join(lines)
+
+
+def coaching_room_cancel_time_from_text(text: str, now: datetime) -> dict[str, str] | None:
+    room_ref = find_coaching_room_reference(text)
+    if not room_ref:
+        return None
+    room_id, room_start, room_end = room_ref
+    if room_id not in COACHING_ROOM_IDS:
+        return None
+
+    after_room = text[room_end:]
+    range_match = COACHING_ROOM_RANGE_RE.search(after_room)
+    if not range_match:
+        return None
+
+    period_hint = coaching_room_period_hint(text)
+    start = parse_coaching_room_time_token(range_match.group("start"), period_hint)
+    if start is None:
+        return None
+    start_hour, start_minute, start_period, _ = start
+    end = parse_coaching_room_time_token(range_match.group("end"), start_period if start_period else period_hint)
+    if end is None:
+        return None
+    end_hour, end_minute, _, _ = end
+    date_source = f"{text[: room_start]} {after_room[range_match.end() :]}"
+    return {
+        "room_id": room_id,
+        "date": coaching_room_status_date_from_text(date_source, now),
+        "start_time": format_coaching_room_time(start_hour, start_minute),
+        "end_time": format_coaching_room_time(end_hour, end_minute),
+    }
+
+
+def find_coaching_room_record_to_cancel(
+    records: list[dict[str, str]],
+    target: str,
+    now: datetime,
+) -> tuple[dict[str, str] | None, str | None]:
+    cleaned = target.strip()
+    compact = re.sub(r"\s+", "", cleaned)
+    if not records:
+        return None, "몽키가 기억하는 내 코칭실 예약이 없어요."
+    if not compact:
+        if len(records) == 1:
+            return records[0], None
+        return None, "예약이 여러 개예요. `내예약`으로 확인하고 `306 취소` 또는 `306 14-15 취소`처럼 말해줘요."
+    if compact == "__latest__":
+        latest = sorted(records, key=lambda item: item.get("created_at", ""), reverse=True)[0]
+        return latest, None
+
+    identifier_match = re.search(r"[0-9a-fA-F]{6,}(?:-[0-9a-fA-F-]+)?", cleaned)
+    if identifier_match:
+        identifier = identifier_match.group(0).lower()
+        matches = [record for record in records if record["id"].lower().startswith(identifier)]
+        if not matches:
+            return None, "`내 코칭 예약`에서 취소할 예약 ID를 확인해줘요."
+        if len(matches) > 1:
+            return None, "예약 ID 앞부분이 겹쳐요. ID를 조금 더 길게 적어줘요."
+        return matches[0], None
+
+    by_time = coaching_room_cancel_time_from_text(cleaned, now)
+    if by_time:
+        matches = [
+            record
+            for record in records
+            if record["room_id"] == by_time["room_id"]
+            and record["date"] == by_time["date"]
+            and record["start_time"] == by_time["start_time"]
+            and record["end_time"] == by_time["end_time"]
+        ]
+        if not matches:
+            return None, "그 시간대에 몽키가 기억하는 내 예약이 없어요. `내 코칭 예약`으로 확인해줘요."
+        if len(matches) > 1:
+            return None, "같은 시간 예약이 여러 개예요. `코칭 취소 예약ID앞8자리`로 취소해줘요."
+        return matches[0], None
+
+    room_ref = find_coaching_room_reference(cleaned)
+    if room_ref:
+        room_id = room_ref[0]
+        room_label = format_coaching_room_room_label(room_id)
+        matches = [record for record in records if record["room_id"] == room_id]
+        if not matches:
+            return None, f"몽키가 기억하는 내 {room_label} 예약이 없어요."
+        if len(matches) > 1:
+            return None, f"{room_label} 예약이 여러 개예요. `내예약`으로 확인하고 시간까지 같이 적어줘요."
+        return matches[0], None
+
+    if compact:
+        matches = [record for record in records if record["id"].lower().startswith(compact.lower())]
+        if len(matches) == 1:
+            return matches[0], None
+
+    return None, "`코칭 취소 예약ID앞8자리` 또는 `306 14-15 취소`처럼 말해줘요."
+
+
+def cancel_coaching_room_reservation(record: dict[str, str], now: datetime) -> dict[str, Any]:
+    result = request_json(
+        "POST",
+        f"{coaching_room_base_url()}/api/reservations/{urllib.parse.quote(record['id'])}/cancel",
+        {"cancelPin": record["cancel_pin"]},
+    )
+    mark_coaching_room_reservation_canceled(record["id"], now)
+    return {"status": "canceled", "record": record, "response": result}
+
+
+def register_existing_coaching_room_reservation(
+    reservation_id_prefix: str,
+    cancel_pin: str,
+    user_id: str,
+    now: datetime,
+) -> tuple[dict[str, str] | None, str | None]:
+    identifier = reservation_id_prefix.strip().lower()
+    if len(identifier) < 6:
+        return None, "예약 ID는 앞 6자리 이상 적어줘요."
+
+    date = now.astimezone(get_timezone()).date().isoformat()
+    query = urllib.parse.urlencode({"date": date})
+    schedule = request_json("GET", f"{coaching_room_base_url()}/api/schedule?{query}")
+    reservations = schedule.get("reservations", [])
+    if not isinstance(reservations, list):
+        reservations = []
+
+    matches = [
+        item
+        for item in reservations
+        if isinstance(item, dict)
+        and item.get("status", "active") == "active"
+        and isinstance(item.get("id"), str)
+        and item["id"].lower().startswith(identifier)
+    ]
+    if not matches:
+        return None, "오늘 예약 중 그 ID를 찾지 못했어요. ID를 다시 확인해줘요."
+    if len(matches) > 1:
+        return None, "예약 ID 앞부분이 겹쳐요. ID를 조금 더 길게 적어줘요."
+
+    reservation = matches[0]
+    result = {
+        "status": "created",
+        "room_id": str(reservation.get("roomId", "")),
+        "date": str(reservation.get("date", date)),
+        "start_time": str(reservation.get("startTime", "")),
+        "end_time": str(reservation.get("endTime", "")),
+        "cancel_pin": cancel_pin,
+        "reservation": {
+            "id": str(reservation.get("id", "")),
+            "nickname": str(reservation.get("nickname", "코칭실 예약")),
+        },
+    }
+    save_created_coaching_room_reservation(result, user_id, now)
+
+    records = [
+        record
+        for record in load_coaching_room_reservations()
+        if record["id"] == result["reservation"]["id"] and record.get("created_by") == user_id
+    ]
+    if not records:
+        return None, "예약은 찾았는데 몽키 저장소에 등록하지 못했어요."
+    return records[0], None
+
+
+def format_coaching_room_register_result(record: dict[str, str], user_id: str | None = None) -> str:
+    mention = f"<@{user_id}> " if user_id else ""
+    room_label = format_coaching_room_room_label(record["room_id"])
+    return (
+        f"{mention}:monkey_face: 코칭실 예약을 내 목록에 등록했어요.\n"
+        f"ID: `{record['id'][:8]}`\n"
+        f"방: {room_label}\n"
+        f"날짜: {record['date']}\n"
+        f"시간: {record['start_time']}-{record['end_time']}\n"
+        f"제목: {record['nickname']}"
+    )
+
+
+def format_coaching_room_cancel_result(result: dict[str, Any], user_id: str | None = None) -> str:
+    mention = f"<@{user_id}> " if user_id else ""
+    record = result["record"]
+    room_label = format_coaching_room_room_label(record["room_id"])
+    return (
+        f"{mention}:monkey_face: 코칭실 예약 취소했어요.\n"
+        f"방: {room_label}\n"
+        f"날짜: {record['date']}\n"
+        f"시간: {record['start_time']}-{record['end_time']}\n"
+        f"제목: {record['nickname']}"
+    )
 
 
 def parse_user_id_lookup_command(text: str) -> bool:
@@ -3376,6 +4008,8 @@ class BotRuntime:
         self.memory = load_memory_store()
         self.user_memory_lock = threading.Lock()
         self.user_memory = load_user_memory_store()
+        self.passive_reply_lock = threading.Lock()
+        self.passive_reply_at: dict[str, float] = {}
         today = day_key_for(datetime.now(self.tz))
         saved_day = load_memory_day()
         self.memory_day = saved_day or today
@@ -3405,6 +4039,35 @@ class BotRuntime:
             turns.append({"role": "assistant", "text": answer})
             self.memory[key] = turns[-MAX_MEMORY_TURNS:]
             save_memory_store(self.memory)
+
+    def remember_observed_message(self, key: str, user_text: str, speaker_id: str | None = None) -> None:
+        user_text = user_text.strip()
+        if not should_store_channel_context_message(user_text):
+            return
+        with self.memory_lock:
+            turns = self.memory.setdefault(key, [])
+            if turns and turns[-1].get("role") == "user" and turns[-1].get("text") == user_text:
+                if speaker_id:
+                    turns[-1]["speaker"] = speaker_id
+            else:
+                user_turn = {"role": "user", "text": user_text}
+                if speaker_id:
+                    user_turn["speaker"] = speaker_id
+                turns.append(user_turn)
+            self.memory[key] = turns[-MAX_MEMORY_TURNS:]
+            save_memory_store(self.memory)
+
+    def passive_reply_allowed(self, channel: str, now: datetime) -> bool:
+        cooldown = max(0, env_int("CHANNEL_PASSIVE_COOLDOWN_SECONDS", 10))
+        if cooldown <= 0:
+            return True
+        timestamp = now.timestamp()
+        with self.passive_reply_lock:
+            last = self.passive_reply_at.get(channel, 0.0)
+            if timestamp - last < cooldown:
+                return False
+            self.passive_reply_at[channel] = timestamp
+        return True
 
     def get_user_memories(self, user_id: str | None) -> list[str]:
         if not user_id:
@@ -3506,6 +4169,7 @@ class BotRuntime:
 
         try:
             result = create_coaching_room_reservation(command, user_id)
+            save_created_coaching_room_reservation(result, user_id, now)
             pin_delivery = None
             if result.get("status") == "created" and user_id:
                 try:
@@ -3518,6 +4182,70 @@ class BotRuntime:
             post_slack_message(
                 channel,
                 f":monkey_face: 코칭실 예약 처리 중 오류가 났어요. `{exc}`",
+                reply_ts,
+                force_thread=True,
+            )
+        return True
+
+    def handle_coaching_room_user_reservations(
+        self,
+        text: str,
+        channel: str,
+        user_id: str | None,
+        reply_ts: str | None,
+        now: datetime,
+    ) -> bool:
+        command = parse_coaching_room_user_reservations_command(text)
+        if command is None:
+            return False
+        if not user_id:
+            post_slack_message(channel, ":monkey_face: 누가 보낸 명령인지 확인하지 못했어요.", reply_ts, force_thread=True)
+            return True
+
+        records = active_coaching_room_records_for_user(user_id, now)
+        if command["action"] == "list":
+            post_slack_message(channel, format_my_coaching_room_reservations(records, user_id), reply_ts, force_thread=True)
+            return True
+        if command["action"] == "ambiguous_cancel":
+            post_slack_message(
+                channel,
+                f"<@{user_id}> :monkey_face: 어떤 예약을 취소할지 조금만 더 구체적으로 말해줘요.\n"
+                "`코칭 취소`, `방금 예약 취소`, `306 취소`, `306 14-15 취소`처럼 쓰면 돼요.",
+                reply_ts,
+                force_thread=True,
+            )
+            return True
+        if command["action"] == "register":
+            record, error = register_existing_coaching_room_reservation(
+                command.get("target", ""),
+                command.get("cancel_pin", ""),
+                user_id,
+                now,
+            )
+            if error:
+                post_slack_message(channel, f"<@{user_id}> :monkey_face: {error}", reply_ts, force_thread=True)
+                return True
+            if record is None:
+                post_slack_message(channel, f"<@{user_id}> :monkey_face: 등록할 예약을 찾지 못했어요.", reply_ts, force_thread=True)
+                return True
+            post_slack_message(channel, format_coaching_room_register_result(record, user_id), reply_ts, force_thread=True)
+            return True
+
+        record, error = find_coaching_room_record_to_cancel(records, command.get("target", ""), now)
+        if error:
+            post_slack_message(channel, f"<@{user_id}> :monkey_face: {error}", reply_ts, force_thread=True)
+            return True
+        if record is None:
+            post_slack_message(channel, f"<@{user_id}> :monkey_face: 취소할 예약을 찾지 못했어요.", reply_ts, force_thread=True)
+            return True
+
+        try:
+            result = cancel_coaching_room_reservation(record, now)
+            post_slack_message(channel, format_coaching_room_cancel_result(result, user_id), reply_ts, force_thread=True)
+        except Exception as exc:
+            post_slack_message(
+                channel,
+                f"<@{user_id}> :monkey_face: 코칭실 예약 취소 중 오류가 났어요. `{exc}`",
                 reply_ts,
                 force_thread=True,
             )
@@ -3565,13 +4293,15 @@ class BotRuntime:
 
         try:
             result = fetch_laundry_status()
-            post_slack_message(channel, format_laundry_status(result, now, user_id), reply_ts, force_thread=True)
+            post_slack_message(
+                channel,
+                format_laundry_status(result, now, user_id),
+                blocks=format_laundry_status_blocks(result, now, user_id),
+            )
         except Exception as exc:
             post_slack_message(
                 channel,
-                f":monkey_face: 세탁 현황을 가져오다가 오류가 났어요. `{exc}`",
-                reply_ts,
-                force_thread=True,
+                format_laundry_fetch_error(exc),
             )
         return True
 
@@ -3633,7 +4363,10 @@ class BotRuntime:
             return
 
         event = payload.get("event", {})
-        if event.get("bot_id") or event.get("subtype") == "bot_message":
+        subtype = event.get("subtype")
+        if event.get("bot_id") or subtype == "bot_message":
+            return
+        if subtype not in {None, ""}:
             return
 
         channel = event.get("channel")
@@ -3644,54 +4377,85 @@ class BotRuntime:
         raw_channel_type = event.get("channel_type")
         channel_type = raw_channel_type if isinstance(raw_channel_type, str) else None
         is_dm = is_direct_message(channel, channel_type)
-        if event_type != "app_mention" and not (event_type == "message" and is_dm):
+        is_app_mention = event_type == "app_mention"
+        is_message = event_type == "message"
+        if not is_app_mention and not is_message:
             return
 
         raw_text = event.get("text", "")
         text = strip_slack_event_command_text(raw_text if isinstance(raw_text, str) else "")
+        called_by_name = has_monkey_call(text)
+        if called_by_name:
+            text = strip_monkey_call(text)
+        if not text and called_by_name:
+            text = "몽키야"
+
         user_id = event.get("user")
         user_id = user_id if isinstance(user_id, str) else None
         event_ts = event.get("ts")
         event_ts = event_ts if isinstance(event_ts, str) else None
         thread_ts = event.get("thread_ts")
         reply_ts = thread_ts if isinstance(thread_ts, str) and thread_ts else event_ts
+        is_direct_call = is_dm or is_app_mention or called_by_name
+        memory_key = conversation_key(event)
+        channel_reply_ts = reply_ts if (is_dm or is_app_mention) else None
 
         try:
             now = datetime.now(self.tz)
             self.reset_memories_if_needed(now)
-            if self.handle_user_id_lookup(text, channel, user_id, reply_ts):
-                return
-            if self.handle_dm_announcement(text, channel, user_id, event_ts):
-                return
-            if self.handle_laundry_status(text, channel, user_id, reply_ts, now):
-                return
-            if self.handle_coaching_room_status(text, channel, user_id, reply_ts, now):
-                return
-            if self.handle_coaching_room_reservation(text, channel, user_id, reply_ts, now):
-                return
-            if is_dm and self.handle_dm_schedule(text, channel, user_id, event_ts, now):
-                return
-            ladder_game, ladder_error = build_ladder_game(text)
-            if ladder_game is not None:
-                ladder_answer = ":monkey_face: 사다리타기 결과예요!\n\n" + format_ladder_result_lines(ladder_game)
-                post_ladder_response(channel, ladder_game, reply_ts)
-                self.remember_exchange(conversation_key(event), text, ladder_answer, user_id)
-                return
-            if ladder_error is not None:
-                post_slack_message(channel, ladder_error, reply_ts)
-                return
+            passive_reply = False
+            if not is_direct_call:
+                if contains_mention_required_command(text):
+                    self.remember_observed_message(memory_key, text, user_id)
+                    return
+                if not should_passively_join_channel_message(text):
+                    self.remember_observed_message(memory_key, text, user_id)
+                    return
+                if not self.passive_reply_allowed(channel, now):
+                    self.remember_observed_message(memory_key, text, user_id)
+                    return
+                passive_reply = True
+
+            if is_direct_call:
+                if self.handle_user_id_lookup(text, channel, user_id, channel_reply_ts):
+                    return
+                if self.handle_dm_announcement(text, channel, user_id, event_ts):
+                    return
+                if self.handle_laundry_status(text, channel, user_id, channel_reply_ts, now):
+                    return
+                if self.handle_coaching_room_user_reservations(text, channel, user_id, channel_reply_ts, now):
+                    return
+                if self.handle_coaching_room_status(text, channel, user_id, channel_reply_ts, now):
+                    return
+                if self.handle_coaching_room_reservation(text, channel, user_id, channel_reply_ts, now):
+                    return
+                if is_dm and self.handle_dm_schedule(text, channel, user_id, event_ts, now):
+                    return
+                ladder_game, ladder_error = build_ladder_game(text)
+                if ladder_game is not None:
+                    ladder_answer = ":monkey_face: 사다리타기 결과예요!\n\n" + format_ladder_result_lines(ladder_game)
+                    post_ladder_response(channel, ladder_game, channel_reply_ts)
+                    self.remember_exchange(memory_key, text, ladder_answer, user_id)
+                    return
+                if ladder_error is not None:
+                    post_slack_message(channel, ladder_error, channel_reply_ts)
+                    return
+
             menu = load_menu()
-            memory_key = conversation_key(event)
             history = self.get_history(memory_key)
             user_memories = self.get_user_memories(user_id)
-            answer = format_menu_response(menu, text, now, user_id=user_id)
+            answer = format_menu_response(menu, text, now, user_id=user_id) if is_direct_call else None
             if answer is None:
                 ai_answer = ask_openai(text, history, user_memories, user_persona_instruction(user_id), user_id)
                 ai_answer = clean_openai_answer(strip_leading_reply_mentions(ai_answer or ""))
-                answer = f"<@{user_id}> {ai_answer}" if user_id and ai_answer else ai_answer or None
+                if ai_answer:
+                    answer = f"<@{user_id}> {ai_answer}" if user_id and is_direct_call else ai_answer
             if answer is None:
+                if passive_reply:
+                    self.remember_observed_message(memory_key, text, user_id)
+                    return
                 answer = fallback_response(user_id=user_id)
-            post_slack_message(channel, answer, reply_ts)
+            post_slack_message(channel, answer, channel_reply_ts if is_direct_call else None)
             self.remember_exchange(memory_key, text, answer, user_id)
             self.remember_user_memory(user_id, text)
         except Exception as exc:
@@ -3700,7 +4464,6 @@ class BotRuntime:
                 post_slack_message(channel, f":monkey_face: 앗, 처리 중 오류가 났어요: `{exc}`")
             except Exception as post_exc:
                 print(f"오류 안내 전송 실패: {post_exc}", file=sys.stderr)
-
 
 runtime = BotRuntime()
 
@@ -3849,7 +4612,7 @@ def start_scheduler() -> None:
 
 
 def maybe_sync_kakao_menu_data(now: datetime, last_sync_at: datetime | None) -> datetime | None:
-    if not env_bool("KAKAO_MENU_AUTO_SYNC", False):
+    if not env_bool("KAKAO_MENU_AUTO_SYNC", True):
         return last_sync_at
     interval = max(60, env_int("KAKAO_MENU_SYNC_INTERVAL_SECONDS", DEFAULT_KAKAO_SYNC_INTERVAL_SECONDS))
     if last_sync_at is not None and (now - last_sync_at).total_seconds() < interval:
@@ -3868,7 +4631,7 @@ def maybe_sync_kakao_menu_data(now: datetime, last_sync_at: datetime | None) -> 
 
 
 def maybe_sync_weekly_menu_image(now: datetime, last_sync_at: datetime | None) -> datetime | None:
-    if not env_bool("KAKAO_WEEKLY_MENU_AUTO_SYNC", False):
+    if not env_bool("KAKAO_WEEKLY_MENU_AUTO_SYNC", True):
         return last_sync_at
     if not weekly_menu_check_window(now):
         return last_sync_at
@@ -3897,7 +4660,7 @@ def maybe_sync_weekly_menu_image(now: datetime, last_sync_at: datetime | None) -
 
 
 def maybe_post_daily_menu_posts(now: datetime, last_sync_at: datetime | None) -> datetime | None:
-    if not env_bool("KAKAO_DAILY_MENU_AUTO_POST", False):
+    if not env_bool("KAKAO_DAILY_MENU_AUTO_POST", True):
         return last_sync_at
     if not daily_menu_post_check_window(now):
         return last_sync_at
@@ -3973,11 +4736,10 @@ def run_socket_mode() -> None:
 
 def run_server() -> None:
     port = int(os.getenv("PORT", "3000"))
-    host = os.getenv("HOST", "127.0.0.1").strip() or "127.0.0.1"
     start_scheduler()
 
-    server = ThreadingHTTPServer((host, port), SlackHandler)
-    print(f"몽키 슬랙봇 실행 중: http://{host}:{port}")
+    server = ThreadingHTTPServer(("0.0.0.0", port), SlackHandler)
+    print(f"몽키 슬랙봇 실행 중: http://0.0.0.0:{port}")
     print(f"메뉴 파일: {menu_path()}")
     server.serve_forever()
 
@@ -3986,8 +4748,12 @@ def preview(text: str, now_arg: str | None) -> int:
     tz = get_timezone()
     now = datetime.fromisoformat(now_arg).astimezone(tz) if now_arg else datetime.now(tz)
     if parse_laundry_status_command(text):
-        print(format_laundry_status(fetch_laundry_status(), now))
-        return 0
+        try:
+            print(format_laundry_status(fetch_laundry_status(), now))
+            return 0
+        except Exception as exc:
+            print(format_laundry_fetch_error(exc))
+            return 1
     menu = load_menu()
     answer = format_menu_response(menu, text, now)
     print(answer or fallback_response())
@@ -4044,4 +4810,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
